@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+# Participant data and trained models stay out of git
+data/*.csv
+models/*.joblib
+models/*.json
+# Simulated data workspace
+sim/

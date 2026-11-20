@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Typing Rhythm Authentication{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="{{ url_for('index') }}">Typing Rhythm Authentication</a>
+    <nav>
+      <a href="{{ url_for('index') }}">Home</a>
+      <a href="{{ url_for('enroll') }}">Data collection</a>
+      <a href="{{ url_for('authenticate_page') }}">Authenticate</a>
+    </nav>
+  </header>
+  {% if workspace_name != "main" %}
+  <div class="ws-banner">Workspace "{{ workspace_name }}": {% if workspace_name == "sim" %}SIMULATED data, not for results{% else %}separate data folder{% endif %}</div>
+  {% endif %}
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+  {% block scripts %}{% endblock %}
+  <footer class="footer">Academic prototype. Not a production security system.</footer>
+</body>
+</html>

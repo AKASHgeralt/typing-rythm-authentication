@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h1>Typing Rhythm Authentication</h1>
+  <p class="muted">Verifies a claimed participant ID from the timing of key presses and releases,
+     using K-Nearest Neighbors and Random Forest.</p>
+</section>
+
+<section class="card">
+  <h2>Sentence</h2>
+  <p class="sentence">{{ sentence }}</p>
+  <p class="muted">{{ sentence|length }} characters, typed by all {{ n_enrolled }} enrolled participants.</p>
+</section>
+
+<section class="card">
+  <h2>Status</h2>
+  <p><span class="badge">Stage 6</span> Data collection, training, evaluation and the <a href="{{ url_for('authenticate_page') }}">authentication</a> page are ready.</p>
+</section>
+{% endblock %}

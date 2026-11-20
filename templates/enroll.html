@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Data collection | Typing Rhythm Authentication{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Data collection</h1>
+  <p class="muted">Choose the participant and session, confirm consent, then type the sentence.
+     Any wrong key or Backspace discards the attempt, and you start again from the first letter.</p>
+</section>
+
+<section class="card">
+  <h2>Setup</h2>
+  <div class="form-grid">
+    <label for="participant">Participant</label>
+    <select id="participant">
+      <option value="">Select...</option>
+      <optgroup label="Enrolled">
+        {% for pid in enrolled_ids %}<option value="{{ pid }}">{{ pid }}</option>{% endfor %}
+      </optgroup>
+      <optgroup label="External impostors">
+        {% for pid in impostor_ids %}<option value="{{ pid }}">{{ pid }} (impostor)</option>{% endfor %}
+      </optgroup>
+    </select>
+
+    <label for="session">Session</label>
+    <select id="session">
+      <option value="1">Session 1</option>
+      <option value="2">Session 2</option>
+    </select>
+
+    <span>Mode</span>
+    <div class="radio-row">
+      <label><input type="radio" name="mode" value="practice" checked> Practice (not saved)</label>
+      <label><input type="radio" name="mode" value="record"> Record</label>
+    </div>
+  </div>
+
+  <details class="consent-info">
+    <summary>Information for participants</summary>
+    <p>This project studies whether people can be recognised from the timing of their typing.
+       The page records which key was pressed and when each key was pressed and released.
+       Attempts are stored under an anonymous code such as P01. No names, passwords or other
+       text are collected, and the data is used only for this university project.
+       You can stop at any time.</p>
+  </details>
+  <label class="consent"><input type="checkbox" id="consent">
+    The participant has read the information above and agrees to take part.</label>
+
+  <p id="progress" class="progress muted">Select a participant to see progress.</p>
+</section>
+
+<section class="card">
+  <div id="typing-area" class="typing-area" tabindex="0"
+       data-sentence="{{ sentence }}" aria-label="Typing area"></div>
+  <p id="status" class="status info">Complete the setup above, then click the box and start typing.</p>
+  <p class="muted">Practice attempts in this sitting: <strong id="practice-count">0</strong></p>
+</section>
+
+<section class="card">
+  <details>
+    <summary>Timings of the last valid attempt</summary>
+    <p id="summary" class="muted">No attempt yet.</p>
+    <div class="table-wrap">
+      <table id="debug-table" class="data">
+        <thead>
+          <tr><th>#</th><th>Key</th><th>Code</th><th>Press (ms)</th><th>Release (ms)</th>
+              <th>Dwell (ms)</th><th>Flight to next (ms)</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </details>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/capture.js') }}"></script>
+<script src="{{ url_for('static', filename='js/enroll.js') }}"></script>
+{% endblock %}
