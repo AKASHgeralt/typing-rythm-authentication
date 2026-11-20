@@ -52,5 +52,5 @@ and simulated results must not be reported.
 
 ## Machines
 
-Code is developed on the PC. All data collection, training and the demo happen on
-the presentation laptop, using its built-in keyboard.
+Development, data collection, training and the demo all happen on the same laptop,
+using its built-in keyboard (no external keyboard).
