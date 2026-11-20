@@ -5,21 +5,24 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SENTENCE = "the quick brown fox jumps over the lazy dog"
+N_USERS = 5
 
-ENROLLED_IDS = ["P01", "P02", "P03", "P04", "P05"]
-IMPOSTOR_IDS = ["X01", "X02"]
+# Attempts per session for the account owner typing their own password.
+OWN_TARGETS = {1: 30, 2: 10}
 
-# Recorded attempts needed per role and session.
-# Impostors type in one session only; their attempts are used for testing only.
-SESSION_TARGETS = {
-    "enrolled": {1: 20, 2: 10},
-    "impostor": {1: 10},
-}
+# Attempts per session for typing OTHER people's passwords ("someone who knows
+# the password"). Keyed by the distance between users in the list, so every
+# person types 5 others' attempts per session and every password receives
+# 5 attempts by others per session:
+#   next user: 2, the one after: 1, then 1, then 1.
+OTHERS_PLAN = {1: 2, 2: 1, 3: 1, 4: 1}
+SESSIONS = (1, 2)
 
-# Sanity limits for one attempt (milliseconds).
+# Sanity limits for one password attempt.
+MIN_PASSWORD_LENGTH = 4
+MAX_PASSWORD_LENGTH = 64
 MAX_DWELL_MS = 2000
-MAX_ATTEMPT_MS = 60000
+MAX_ATTEMPT_MS = 30000
 
 RANDOM_SEED = 42
 
@@ -47,19 +50,22 @@ class Workspace:
         self.reports_dir = self.root / "reports"
         self.figures_dir = self.reports_dir / "figures"
 
+        self.users_file = self.data_dir / "users.json"
         self.raw_file = self.data_dir / "raw_keystrokes.csv"
-        self.features_file = self.data_dir / "features.csv"
-        self.features_b_file = self.data_dir / "features_set_b.csv"
-        self.auth_log_file = self.data_dir / "auth_log.csv"
+        self.features_dir = self.data_dir / "features"
+        self.login_log_file = self.data_dir / "login_log.csv"
         self.thresholds_file = self.models_dir / "thresholds.json"
         self.cv_metrics_file = self.reports_dir / "cv_metrics.json"
         self.test_metrics_file = self.reports_dir / "test_metrics.json"
 
-    def model_file(self, model_name):
-        return self.models_dir / f"{model_name}.joblib"
+    def model_file(self, model_name, user_id):
+        return self.models_dir / f"{model_name}_{user_id}.joblib"
+
+    def features_file(self, user_id):
+        return self.features_dir / f"{user_id}.csv"
 
     def ensure_dirs(self):
-        for d in (self.data_dir, self.models_dir, self.figures_dir):
+        for d in (self.data_dir, self.models_dir, self.figures_dir, self.features_dir):
             d.mkdir(parents=True, exist_ok=True)
 
 

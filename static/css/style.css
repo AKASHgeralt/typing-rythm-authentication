@@ -160,3 +160,48 @@ code { background: var(--bg); border: 1px solid var(--border); border-radius: 4p
        padding: 0 4px; font-size: 0.9em; }
 .ws-banner { background: #5a3e00; color: #ffd27a; text-align: center; padding: 6px;
              font-size: 0.9rem; }
+
+/* Password version */
+.field-label { display: block; margin: 12px 0 6px; color: var(--muted); }
+.pw-input {
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  font: inherit;
+  font-size: 1.15rem;
+  outline: none;
+}
+.pw-input:focus { border-color: var(--accent); }
+.pw-input.shake { animation: shake 0.3s; border-color: var(--bad); }
+.btn {
+  margin-top: 16px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 22px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn:hover { filter: brightness(1.1); }
+.login-card { max-width: 460px; margin-left: auto; margin-right: auto; }
+.login-card + .result { max-width: 460px; margin-left: auto; margin-right: auto; text-align: center; }
+.tasks { display: grid; gap: 6px; }
+.task {
+  display: grid;
+  grid-template-columns: 24px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.task:has(input:checked) { border-color: var(--accent); }
+.task.done { color: var(--muted); }
+.task .count { font-variant-numeric: tabular-nums; color: var(--muted); }
+.task.done .count { color: var(--ok); }

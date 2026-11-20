@@ -3,28 +3,30 @@
 {% block content %}
 <section class="card">
   <h1>Data collection</h1>
-  <p class="muted">Choose the participant and session, confirm consent, then type the sentence.
-     Any wrong key or Backspace discards the attempt, and you start again from the first letter.</p>
+  <p class="muted">Each person types their own password and, a few times, other people's
+     passwords. Passwords are given on the paper sheet; they are never shown on screen.</p>
 </section>
 
+{% if not users %}
+<section class="card">
+  <p class="status bad">No users registered.</p>
+  <p class="muted">Register the five accounts first with
+     <code>python -m src.users add --name NAME --email EMAIL</code>.</p>
+</section>
+{% else %}
 <section class="card">
   <h2>Setup</h2>
   <div class="form-grid">
-    <label for="participant">Participant</label>
-    <select id="participant">
+    <label for="typist">Who is typing</label>
+    <select id="typist">
       <option value="">Select...</option>
-      <optgroup label="Enrolled">
-        {% for pid in enrolled_ids %}<option value="{{ pid }}">{{ pid }}</option>{% endfor %}
-      </optgroup>
-      <optgroup label="External impostors">
-        {% for pid in impostor_ids %}<option value="{{ pid }}">{{ pid }} (impostor)</option>{% endfor %}
-      </optgroup>
+      {% for u in users %}<option value="{{ u.user_id }}">{{ u.name }} ({{ u.user_id }})</option>{% endfor %}
     </select>
 
     <label for="session">Session</label>
     <select id="session">
-      <option value="1">Session 1</option>
-      <option value="2">Session 2</option>
+      <option value="1">Session 1 (day 1)</option>
+      <option value="2">Session 2 (another day)</option>
     </select>
 
     <span>Mode</span>
@@ -37,41 +39,33 @@
   <details class="consent-info">
     <summary>Information for participants</summary>
     <p>This project studies whether people can be recognised from the timing of their typing.
-       The page records which key was pressed and when each key was pressed and released.
-       Attempts are stored under an anonymous code such as P01. No names, passwords or other
-       text are collected, and the data is used only for this university project.
-       You can stop at any time.</p>
+       The page records when each key is pressed and released. The password itself, the
+       characters and the key names are not stored; attempts are saved under an anonymous
+       code such as U01. The data is used only for this university project, and you can stop
+       at any time.</p>
   </details>
   <label class="consent"><input type="checkbox" id="consent">
     The participant has read the information above and agrees to take part.</label>
-
-  <p id="progress" class="progress muted">Select a participant to see progress.</p>
 </section>
 
 <section class="card">
-  <div id="typing-area" class="typing-area" tabindex="0"
-       data-sentence="{{ sentence }}" aria-label="Typing area"></div>
-  <p id="status" class="status info">Complete the setup above, then click the box and start typing.</p>
+  <h2>Tasks</h2>
+  <p class="muted" id="tasks-hint">Select who is typing to see their tasks.</p>
+  <div id="tasks" class="tasks"></div>
+</section>
+
+<section class="card">
+  <label for="pw" class="field-label" id="pw-label">Password</label>
+  <input id="pw" class="pw-input" type="password" autocomplete="new-password"
+         spellcheck="false" placeholder="Choose a task above">
+  <p id="status" class="status info">Complete the setup, choose a task, then type the password and press Enter.</p>
   <p class="muted">Practice attempts in this sitting: <strong id="practice-count">0</strong></p>
 </section>
-
-<section class="card">
-  <details>
-    <summary>Timings of the last valid attempt</summary>
-    <p id="summary" class="muted">No attempt yet.</p>
-    <div class="table-wrap">
-      <table id="debug-table" class="data">
-        <thead>
-          <tr><th>#</th><th>Key</th><th>Code</th><th>Press (ms)</th><th>Release (ms)</th>
-              <th>Dwell (ms)</th><th>Flight to next (ms)</th></tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </div>
-  </details>
-</section>
+{% endif %}
 {% endblock %}
 {% block scripts %}
+{% if users %}
 <script src="{{ url_for('static', filename='js/capture.js') }}"></script>
 <script src="{{ url_for('static', filename='js/enroll.js') }}"></script>
+{% endif %}
 {% endblock %}

@@ -2,18 +2,25 @@
 {% block content %}
 <section class="card">
   <h1>Typing Rhythm Authentication</h1>
-  <p class="muted">Verifies a claimed participant ID from the timing of key presses and releases,
-     using K-Nearest Neighbors and Random Forest.</p>
+  <p class="muted">A login page that checks two things: the password, and the rhythm in which
+     it is typed. Someone who knows another person's password should still be rejected,
+     because they type it differently. Each account has its own models (nearest-neighbour
+     distance and Random Forest).</p>
 </section>
 
 <section class="card">
-  <h2>Sentence</h2>
-  <p class="sentence">{{ sentence }}</p>
-  <p class="muted">{{ sentence|length }} characters, typed by all {{ n_enrolled }} enrolled participants.</p>
+  <h2>Accounts</h2>
+  {% if users %}
+  <p class="muted">{{ users|length }} of {{ n_users }} accounts registered:
+     {% for u in users %}{{ u.name }} ({{ u.user_id }}){% if not loop.last %}, {% endif %}{% endfor %}.</p>
+  {% else %}
+  <p class="muted">No accounts registered yet. Use <code>python -m src.users add --name NAME --email EMAIL</code>.</p>
+  {% endif %}
 </section>
 
 <section class="card">
-  <h2>Status</h2>
-  <p><span class="badge">Stage 6</span> Data collection, training, evaluation and the <a href="{{ url_for('authenticate_page') }}">authentication</a> page are ready.</p>
+  <h2>Pages</h2>
+  <p><a href="{{ url_for('collect') }}">Data collection</a>: record typing for training and testing.</p>
+  <p><a href="{{ url_for('login_page') }}">Login</a>: the demo login page.</p>
 </section>
 {% endblock %}

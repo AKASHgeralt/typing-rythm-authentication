@@ -8,3 +8,7 @@ models/*.joblib
 models/*.json
 # Simulated data workspace
 sim/
+# Old sentence-version data
+archive/
+data/users.json
+data/features/

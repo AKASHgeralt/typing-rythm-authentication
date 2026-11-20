@@ -1,11 +1,11 @@
-"""Create SIMULATED keystroke data for testing the pipeline before real data exists.
+"""Create SIMULATED users and typing data for testing the pipeline.
 
-The data is written to the separate "sim" workspace (sim/data/...), never to the
-real data folder. Results from simulated data must not be reported as findings.
+Everything is written to the separate "sim" workspace (sim/data/...), never to
+the real data folder. Simulated results must not be reported as findings.
 
-Each simulated person has their own typical hold time and their own rhythm for
-every key and key pair, plus random noise. Session 2 is made slightly faster to
-imitate practice between sessions.
+Each simulated person has their own typing style. The owner of a password
+types it faster and more consistently than other people, who are typing an
+unfamiliar password.
 
 Run:  python -m src.simulate
 """
@@ -15,36 +15,42 @@ from datetime import datetime, timedelta
 
 import numpy as np
 
-from src import config
-from src.storage import COLUMNS
+from src import config, storage, users
 
-SENTENCE = config.SENTENCE
-
-
-def make_person(rng):
-    return {
-        "dwell_base": rng.uniform(85, 125),
-        "dwell_key": {ch: rng.normal(0, 10) for ch in set(SENTENCE)},
-        "dwell_noise": rng.uniform(15, 30),
-        "gap_base": rng.uniform(170, 230),
-        "gap_pair": rng.normal(0, 30, len(SENTENCE) - 1),
-        "gap_noise": rng.uniform(40, 80),
-    }
+SIM_USERS = [  # demo accounts for the simulated workspace only
+    ("Sim One", "sim1@example.com", "river@123"),
+    ("Sim Two", "sim2@example.com", "stone@1234"),
+    ("Sim Three", "sim3@example.com", "cloud@12"),
+    ("Sim Four", "sim4@example.com", "maple@1234"),
+    ("Sim Five", "sim5@example.com", "ember@123"),
+]
 
 
-def make_attempt(person, rng, speed=1.0):
-    pace = speed * rng.normal(1.0, 0.05)        # whole attempt a bit faster or slower
-    press, keys, t = [], [], 0.0
-    for i, ch in enumerate(SENTENCE):
-        if i > 0:
-            gap = (person["gap_base"] + person["gap_pair"][i - 1]) * pace
-            t += max(20.0, gap + rng.normal(0, person["gap_noise"]))
-        dwell = person["dwell_base"] + person["dwell_key"][ch] + rng.normal(0, person["dwell_noise"])
-        dwell = max(30.0, dwell)
-        keys.append({"key_index": i, "key": ch,
-                     "code": "Space" if ch == " " else "Key" + ch.upper(),
-                     "press_ms": round(t, 2), "release_ms": round(t + dwell, 2)})
-    return keys
+class Person:
+    def __init__(self, rng):
+        self.rng = rng
+        self.dwell_base = rng.uniform(80, 130)
+        self.gap_base = rng.uniform(150, 240)
+        self.dwell_key, self.gap_pair = {}, {}
+
+    def dwell(self, ch):
+        return self.dwell_key.setdefault(ch, self.dwell_base + self.rng.normal(0, 15))
+
+    def gap(self, a, b):
+        return self.gap_pair.setdefault((a, b), self.gap_base + self.rng.normal(0, 45))
+
+    def type(self, password, own, speed=1.0):
+        rng = self.rng
+        familiar = 0.92 if own else 1.05         # owners know their password well
+        noise = 0.85 if own else 1.0
+        keys, t = [], 0.0
+        for i, ch in enumerate(password):
+            if i > 0:
+                t += max(25.0, self.gap(password[i - 1], ch) * familiar * speed
+                         + rng.normal(0, 35 * noise))
+            d = max(30.0, self.dwell(ch) + rng.normal(0, 14 * noise))
+            keys.append({"key_index": i, "press_ms": round(t, 2), "release_ms": round(t + d, 2)})
+        return keys
 
 
 def main():
@@ -54,28 +60,37 @@ def main():
     rng = np.random.default_rng(args.seed)
     ws = config.Workspace("sim")
     ws.ensure_dirs()
+    for f in (ws.users_file, ws.raw_file):
+        if f.exists():
+            f.write_text("")
+    users.save_users(ws, [])
+    for name, email, pw in SIM_USERS:
+        users.add_user(ws, name, email, pw)
+    passwords = {u["user_id"]: pw for u, (_, _, pw) in zip(users.load_users(ws), SIM_USERS)}
+    people = {uid: Person(rng) for uid in passwords}
 
-    day1 = datetime(2026, 1, 1, 10, 0)
-    plan = [(pid, "enrolled", s, n) for pid in config.ENROLLED_IDS
-            for s, n in config.SESSION_TARGETS["enrolled"].items()]
-    plan += [(pid, "impostor", 1, config.SESSION_TARGETS["impostor"][1])
-             for pid in config.IMPOSTOR_IDS]
-
-    people = {pid: make_person(rng) for pid in config.ENROLLED_IDS + config.IMPOSTOR_IDS}
     attempt_id = 0
     with open(ws.raw_file, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=COLUMNS, quoting=csv.QUOTE_NONNUMERIC)
-        writer.writeheader()
-        for pid, role, session, n in plan:
-            speed = 0.95 if session == 2 else 1.0
-            when = day1 + timedelta(days=session - 1)
-            for _ in range(n):
-                attempt_id += 1
-                for k in make_attempt(people[pid], rng, speed):
-                    writer.writerow({"participant_id": pid, "role": role, "session": session,
-                                     "attempt_id": attempt_id,
-                                     "recorded_at": when.isoformat(timespec="seconds"), **k})
+        w = csv.DictWriter(f, fieldnames=storage.COLUMNS)
+        w.writeheader()
+        for session in config.SESSIONS:
+            when = datetime(2026, 1, 1, 10) + timedelta(days=session - 1)
+            for typist in passwords:
+                for target, n in storage.plan(ws, typist, session):
+                    tid = target["user_id"]
+                    for _ in range(n):
+                        attempt_id += 1
+                        keys = people[typist].type(passwords[tid], own=(tid == typist),
+                                                   speed=0.95 if session == 2 else 1.0)
+                        for k in keys:
+                            w.writerow({"typist_id": typist, "target_id": tid,
+                                        "role": "genuine" if tid == typist else "impostor",
+                                        "session": session, "attempt_id": attempt_id,
+                                        "recorded_at": when.isoformat(timespec="seconds"), **k})
     print(f"Wrote {attempt_id} SIMULATED attempts to {ws.raw_file}")
+    print("Simulated accounts (for trying the login page with --workspace sim):")
+    for name, email, pw in SIM_USERS:
+        print(f"  {email:<20} {pw}")
 
 
 if __name__ == "__main__":

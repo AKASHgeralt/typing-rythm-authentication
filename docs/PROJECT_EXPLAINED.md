@@ -1,3 +1,5 @@
+> **OUTDATED.** This file describes the earlier fixed-sentence version. The project now uses an email + password login page (see docs/COLLECTION_GUIDE.md). An updated explanation will replace this file.
+
 # Typing Rhythm Authentication Using Lightweight Machine Learning
 ## Complete project description (for studying and teaching the team)
 

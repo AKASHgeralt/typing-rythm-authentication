@@ -1,55 +1,25 @@
 {% extends "base.html" %}
-{% block title %}Authenticate | Typing Rhythm Authentication{% endblock %}
+{% block title %}Login | Typing Rhythm Authentication{% endblock %}
 {% block content %}
-<section class="card">
-  <h1>Authenticate</h1>
-  <p class="muted">Choose the participant ID you claim to be, then type the sentence.
-     Access is granted if the model's score for that ID reaches the model's threshold.</p>
-</section>
-
-{% if not models %}
-<section class="card">
-  <p class="status bad">No trained model found.</p>
-  <p class="muted">Collect the data, then run <code>python -m src.features</code> and
-     <code>python -m src.train</code>{% if workspace_name != "main" %} with
-     <code>--workspace {{ workspace_name }}</code>{% endif %}.</p>
-</section>
-{% else %}
-<section class="card">
-  <div class="form-grid">
-    <label for="claimed">Claimed ID</label>
-    <select id="claimed">
-      <option value="">Select...</option>
-      {% for pid in enrolled_ids %}<option value="{{ pid }}">{{ pid }}</option>{% endfor %}
-    </select>
-
-    <label for="model">Model</label>
-    <select id="model">
-      {% for m in models.models %}
-      <option value="{{ m.name }}" {% if m.name == models.demo_model %}selected{% endif %}>
-        {{ m.label }}{% if m.name == models.demo_model %} (chosen by cross-validation){% endif %}
-      </option>
-      {% endfor %}
-    </select>
-  </div>
-
-  <div id="typing-area" class="typing-area" tabindex="0"
-       data-sentence="{{ sentence }}" aria-label="Typing area"></div>
-  <p id="status" class="status info">Select a claimed ID, then click the box and start typing.</p>
+<section class="card login-card">
+  <h1>Login</h1>
+  <p class="muted">The password must be correct, and it must be typed with the account owner's rhythm.</p>
+  <form id="login-form" autocomplete="off" novalidate>
+    <label for="email" class="field-label">Email</label>
+    <input id="email" class="pw-input" type="email" autocomplete="off" spellcheck="false">
+    <label for="pw" class="field-label">Password</label>
+    <input id="pw" class="pw-input" type="password" autocomplete="new-password" spellcheck="false">
+    <button id="login-btn" class="btn" type="submit">Login</button>
+  </form>
+  <p id="status" class="status info"></p>
 </section>
 
 <section id="result" class="card result hidden" aria-live="polite">
   <p id="verdict" class="verdict"></p>
   <p id="explain" class="muted"></p>
-  <div id="bars" class="bars"></div>
-  <p class="muted small">Scores come from the model's predict_proba output. They are
-     relative scores between the five enrolled participants, not calibrated probabilities.</p>
 </section>
-{% endif %}
 {% endblock %}
 {% block scripts %}
-{% if models %}
 <script src="{{ url_for('static', filename='js/capture.js') }}"></script>
 <script src="{{ url_for('static', filename='js/authenticate.js') }}"></script>
-{% endif %}
 {% endblock %}

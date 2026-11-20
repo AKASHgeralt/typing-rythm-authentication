@@ -3,7 +3,7 @@ import argparse
 from flask import Flask, jsonify, render_template, request
 
 from src import authenticate as auth
-from src import config, storage
+from src import config, storage, users
 
 app = Flask(__name__)
 
@@ -26,57 +26,51 @@ def inject_workspace():
 
 @app.route("/")
 def index():
-    return render_template("index.html", sentence=config.SENTENCE,
-                           n_enrolled=len(config.ENROLLED_IDS))
+    return render_template("index.html", users=users.load_users(workspace()),
+                           n_users=config.N_USERS)
 
 
-@app.route("/enroll")
-def enroll():
-    return render_template("enroll.html", sentence=config.SENTENCE,
-                           enrolled_ids=config.ENROLLED_IDS,
-                           impostor_ids=config.IMPOSTOR_IDS)
+@app.route("/collect")
+def collect():
+    return render_template("enroll.html",
+                           users=[users.public(u) for u in users.load_users(workspace())])
 
 
-@app.route("/authenticate")
-def authenticate_page():
-    return render_template("authenticate.html", sentence=config.SENTENCE,
-                           enrolled_ids=config.ENROLLED_IDS,
-                           models=auth.available(workspace()))
+@app.route("/login")
+def login_page():
+    return render_template("authenticate.html")
 
 
-@app.get("/api/progress/<participant_id>")
-def api_progress(participant_id):
+@app.get("/api/progress/<typist_id>/<int:session>")
+def api_progress(typist_id, session):
     try:
-        return jsonify(storage.progress(workspace().raw_file, participant_id))
+        return jsonify(storage.progress(workspace(), typist_id, session))
     except storage.AttemptError as e:
         return jsonify(error=str(e)), 404
 
 
 @app.post("/api/attempts")
 def api_save_attempt():
-    path = workspace().raw_file
     payload = request.get_json(silent=True)
     try:
-        attempt_id = storage.save_attempt(path, payload)
+        attempt_id = storage.save_attempt(workspace(), payload)
     except storage.AttemptError as e:
         return jsonify(error=str(e)), 400
-    return jsonify(attempt_id=attempt_id,
-                   progress=storage.progress(path, payload["participant_id"])), 201
+    return jsonify(attempt_id=attempt_id, practice=attempt_id is None,
+                   progress=storage.progress(workspace(), payload["typist_id"],
+                                             payload["session"])), 201
 
 
-@app.post("/api/authenticate")
-def api_authenticate():
+@app.post("/api/login")
+def api_login():
     payload = request.get_json(silent=True)
     if not isinstance(payload, dict):
         return jsonify(error="Request body must be a JSON object."), 400
     try:
-        keys = storage.validate_keys(payload.get("keys"))
-        result = auth.authenticate(workspace(), payload.get("claimed_id"),
-                                   payload.get("model"), keys)
-    except (storage.AttemptError, ValueError) as e:
+        result = auth.login(workspace(), payload.get("email"), payload.get("password"),
+                            payload.get("keys"))
+    except storage.AttemptError as e:
         return jsonify(error=str(e)), 400
-    except auth.NotTrained as e:
-        return jsonify(error=str(e)), 409
     return jsonify(result)
 
 

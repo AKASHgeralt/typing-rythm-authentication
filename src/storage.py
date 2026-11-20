@@ -1,18 +1,21 @@
-"""Validation and CSV storage of typing attempts.
+"""Validation and CSV storage of password typing attempts.
 
-Each valid attempt adds one row per keystroke to raw_keystrokes.csv.
-The server checks every attempt again, so a request that did not come from
-the typing page (or was modified) cannot add bad data.
+Every attempt is one person (the typist) typing one account's password (the
+target). If typist and target are the same person the attempt is "genuine";
+otherwise it is an "impostor" attempt by someone who knows the password.
+
+The raw file stores ONLY timings and IDs. It does not store the password,
+the characters or the key codes, so the data does not reveal any password.
 """
 import csv
 import math
 import threading
 from datetime import datetime
 
-from src import config
+from src import config, users
 
-COLUMNS = ["participant_id", "role", "session", "attempt_id", "key_index",
-           "key", "code", "press_ms", "release_ms", "recorded_at"]
+COLUMNS = ["typist_id", "target_id", "role", "session", "attempt_id",
+           "key_index", "press_ms", "release_ms", "recorded_at"]
 
 _lock = threading.Lock()
 
@@ -21,12 +24,20 @@ class AttemptError(ValueError):
     """Raised when an attempt fails validation."""
 
 
-def role_of(participant_id):
-    if participant_id in config.ENROLLED_IDS:
-        return "enrolled"
-    if participant_id in config.IMPOSTOR_IDS:
-        return "impostor"
-    raise AttemptError(f"Unknown participant ID: {participant_id!r}")
+def plan(ws, typist_id, session):
+    """The typing tasks of one person in one session: [(target user, required count)]."""
+    all_users = users.load_users(ws)
+    ids = [u["user_id"] for u in all_users]
+    if typist_id not in ids:
+        raise AttemptError(f"Unknown user: {typist_id!r}")
+    if session not in config.SESSIONS:
+        raise AttemptError(f"Unknown session: {session!r}")
+    i = ids.index(typist_id)
+    tasks = [(all_users[i], config.OWN_TARGETS[session])]
+    for step, count in sorted(config.OTHERS_PLAN.items()):
+        if step < len(ids):
+            tasks.append((all_users[(i + step) % len(ids)], count))
+    return tasks
 
 
 def _read_rows(path):
@@ -36,29 +47,23 @@ def _read_rows(path):
         return list(csv.DictReader(f))
 
 
-def attempt_counts(path, participant_id):
-    """Number of saved attempts for one participant, per session."""
-    seen = set()
-    for row in _read_rows(path):
-        if row["participant_id"] == participant_id:
-            seen.add((int(row["session"]), int(row["attempt_id"])))
-    counts = {}
-    for session, _ in seen:
-        counts[session] = counts.get(session, 0) + 1
-    return counts
+def _saved_counts(rows):
+    seen = {}
+    for r in rows:
+        key = (r["typist_id"], r["target_id"], int(r["session"]))
+        seen.setdefault(key, set()).add(r["attempt_id"])
+    return {k: len(v) for k, v in seen.items()}
 
 
-def progress(path, participant_id):
-    role = role_of(participant_id)
-    counts = attempt_counts(path, participant_id)
-    return {
-        "participant_id": participant_id,
-        "role": role,
-        "sessions": {
-            str(s): {"saved": counts.get(s, 0), "target": t}
-            for s, t in config.SESSION_TARGETS[role].items()
-        },
-    }
+def progress(ws, typist_id, session):
+    counts = _saved_counts(_read_rows(ws.raw_file))
+    out = []
+    for target, required in plan(ws, typist_id, session):
+        saved = counts.get((typist_id, target["user_id"], session), 0)
+        out.append({"target_id": target["user_id"], "target_name": target["name"],
+                    "role": "genuine" if target["user_id"] == typist_id else "impostor",
+                    "saved": saved, "required": required})
+    return out
 
 
 def _number(value, name):
@@ -69,41 +74,14 @@ def _number(value, name):
     return float(value)
 
 
-def validate(payload):
-    """Check a submitted attempt and return (participant_id, role, session, keys)."""
-    if not isinstance(payload, dict):
-        raise AttemptError("Request body must be a JSON object.")
-    if payload.get("consent") is not True:
-        raise AttemptError("Consent has not been confirmed.")
-
-    pid = payload.get("participant_id")
-    role = role_of(pid)
-
-    session = payload.get("session")
-    if session not in config.SESSION_TARGETS[role]:
-        raise AttemptError(f"Session {session!r} is not valid for {pid}.")
-
-    return pid, role, session, validate_keys(payload.get("keys"))
-
-
-def validate_keys(keys):
-    """Check the keystrokes of one attempt and return a cleaned list."""
-    sentence = config.SENTENCE
-    if not isinstance(keys, list) or len(keys) != len(sentence):
-        raise AttemptError(f"An attempt must contain exactly {len(sentence)} keys.")
-
-    clean = []
-    previous_press = -1.0
+def validate_keys(keys, expected_length):
+    """Check the timings of one attempt and return a cleaned list."""
+    if not isinstance(keys, list) or len(keys) != expected_length:
+        raise AttemptError("The number of key presses does not match the password.")
+    clean, previous_press = [], -1.0
     for i, k in enumerate(keys):
-        if not isinstance(k, dict):
-            raise AttemptError(f"Key {i} is not an object.")
-        if k.get("key_index") != i:
-            raise AttemptError(f"Key {i} has the wrong index.")
-        if k.get("key") != sentence[i]:
-            raise AttemptError(f"Key {i} does not match the sentence.")
-        code = k.get("code")
-        if not isinstance(code, str) or not code or len(code) > 30:
-            raise AttemptError(f"Key {i} has an invalid key code.")
+        if not isinstance(k, dict) or k.get("key_index") != i:
+            raise AttemptError(f"Key {i} is missing or out of order.")
         press = _number(k.get("press_ms"), f"press_ms of key {i}")
         release = _number(k.get("release_ms"), f"release_ms of key {i}")
         if i == 0 and press != 0:
@@ -115,36 +93,57 @@ def validate_keys(keys):
         if release > config.MAX_ATTEMPT_MS:
             raise AttemptError("The attempt took too long.")
         previous_press = press
-        clean.append({"key_index": i, "key": k["key"], "code": code,
-                      "press_ms": round(press, 2), "release_ms": round(release, 2)})
+        clean.append({"key_index": i, "press_ms": round(press, 2),
+                      "release_ms": round(release, 2)})
     return clean
 
 
-def save_attempt(path, payload):
-    """Validate and append one attempt. Returns the new attempt_id."""
-    pid, role, session, keys = validate(payload)
-    with _lock:
-        rows = _read_rows(path)
-        saved = len({r["attempt_id"] for r in rows
-                     if r["participant_id"] == pid and int(r["session"]) == session})
-        target = config.SESSION_TARGETS[role][session]
-        if saved >= target:
-            raise AttemptError(
-                f"Session {session} for {pid} is already complete ({saved}/{target}).")
+def validate(ws, payload):
+    """Return (typist, target, session, practice, keys) or raise AttemptError."""
+    if not isinstance(payload, dict):
+        raise AttemptError("Request body must be a JSON object.")
+    if payload.get("consent") is not True:
+        raise AttemptError("Consent has not been confirmed.")
+    typist = users.by_id(ws, payload.get("typist_id"))
+    target = users.by_id(ws, payload.get("target_id"))
+    if typist is None or target is None:
+        raise AttemptError("Unknown user.")
+    session = payload.get("session")
+    if session not in config.SESSIONS:
+        raise AttemptError(f"Unknown session: {session!r}")
+    if target["user_id"] not in [t["user_id"] for t, _ in plan(ws, typist["user_id"], session)]:
+        raise AttemptError("This person has no task for that account.")
+    password = payload.get("password")
+    if not users.password_ok(target, password):
+        raise AttemptError(f"Wrong password for {target['name']}'s account. Not saved; "
+                           "please type it again.")
+    keys = validate_keys(payload.get("keys"), len(password))
+    return typist, target, session, payload.get("practice") is True, keys
 
+
+def save_attempt(ws, payload):
+    """Validate and append one attempt. Returns the new attempt_id (None for practice)."""
+    typist, target, session, practice, keys = validate(ws, payload)
+    if practice:
+        return None
+    required = dict((t["user_id"], n) for t, n in plan(ws, typist["user_id"], session))
+    with _lock:
+        rows = _read_rows(ws.raw_file)
+        saved = _saved_counts(rows).get((typist["user_id"], target["user_id"], session), 0)
+        if saved >= required[target["user_id"]]:
+            raise AttemptError("This task is already complete for this session.")
         attempt_id = max((int(r["attempt_id"]) for r in rows), default=0) + 1
         recorded_at = datetime.now().isoformat(timespec="seconds")
+        role = "genuine" if typist["user_id"] == target["user_id"] else "impostor"
 
-        path.parent.mkdir(parents=True, exist_ok=True)
-        new_file = not path.exists()
-        with open(path, "a", newline="", encoding="utf-8") as f:
-            # Quote text fields so the space character survives in the CSV.
-            writer = csv.DictWriter(f, fieldnames=COLUMNS,
-                                    quoting=csv.QUOTE_NONNUMERIC)
+        ws.data_dir.mkdir(parents=True, exist_ok=True)
+        new_file = not ws.raw_file.exists()
+        with open(ws.raw_file, "a", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=COLUMNS)
             if new_file:
                 writer.writeheader()
             for k in keys:
-                writer.writerow({"participant_id": pid, "role": role,
-                                 "session": session, "attempt_id": attempt_id,
+                writer.writerow({"typist_id": typist["user_id"], "target_id": target["user_id"],
+                                 "role": role, "session": session, "attempt_id": attempt_id,
                                  "recorded_at": recorded_at, **k})
     return attempt_id

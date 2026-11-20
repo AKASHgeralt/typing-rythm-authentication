@@ -1,5 +1,5 @@
-"""Stage 4: box plots of each feature per participant (Session 1), for checking
-the data and for the report.
+"""Count attempts and plot mean dwell and mean flight time per account,
+genuine vs impostor (Session 1), for checking the data and for the report.
 
 Run:  python -m src.explore     (add --workspace sim for simulated data)
 """
@@ -10,16 +10,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from src import config
-from src.features import FEATURE_COLUMNS
-
-LABELS = {
-    "dwell_mean": "Mean dwell (ms)", "dwell_median": "Median dwell (ms)",
-    "dwell_std": "Std. dwell (ms)", "flight_mean": "Mean flight (ms)",
-    "flight_median": "Median flight (ms)", "flight_std": "Std. flight (ms)",
-    "p2p_std": "Std. press-to-press (ms)", "overlap_ratio": "Overlap ratio",
-    "chars_per_sec": "Characters per second",
-}
+from src import config, users
+from src.features import build_all
 
 
 def main():
@@ -29,21 +21,32 @@ def main():
     ws = config.Workspace(args.workspace)
     ws.ensure_dirs()
 
-    df = pd.read_csv(ws.features_file, dtype={"participant_id": str, "role": str})
-    print(df.groupby(["role", "participant_id", "session"]).size()
-          .rename("attempts").to_string())
-    s1 = df[(df["role"] == "enrolled") & (df["session"] == 1)]
-    ids = sorted(s1["participant_id"].unique())
+    all_users = users.load_users(ws)
+    names = {u["user_id"]: u["name"] for u in all_users}
+    feats = build_all(ws)
 
-    fig, axes = plt.subplots(3, 3, figsize=(10, 8))
-    for ax, col in zip(axes.ravel(), FEATURE_COLUMNS):
-        ax.boxplot([s1.loc[s1["participant_id"] == p, col] for p in ids])
-        ax.set_xticks(range(1, len(ids) + 1), ids)
-        ax.set_title(LABELS[col], fontsize=9)
-        ax.tick_params(labelsize=8)
-    fig.suptitle("Session 1 features by participant", fontsize=11)
+    print("Attempts per account (target), session and role:")
+    for uid, df in feats.items():
+        print(f"  {uid} ({names[uid]}): " + ", ".join(
+            f"S{s} {r}: {n}" for (s, r), n in df.groupby(["session", "role"]).size().items()))
+
+    fig, axes = plt.subplots(2, len(feats), figsize=(2.4 * len(feats), 5.2), squeeze=False)
+    for j, (uid, df) in enumerate(feats.items()):
+        s1 = df[df["session"] == 1]
+        dwell = s1.filter(regex=r"^d\d+$").mean(axis=1)
+        flight = s1.filter(regex=r"^f\d+$").mean(axis=1)
+        for i, (vals, label) in enumerate([(dwell, "Mean dwell (ms)"), (flight, "Mean flight (ms)")]):
+            ax = axes[i][j]
+            ax.boxplot([vals[s1["role"] == "genuine"], vals[s1["role"] == "impostor"]])
+            ax.set_xticks([1, 2], ["owner", "others"])
+            ax.tick_params(labelsize=8)
+            if j == 0:
+                ax.set_ylabel(label, fontsize=9)
+            if i == 0:
+                ax.set_title(f"{uid}'s password", fontsize=9)
+    fig.suptitle("Session 1: owner vs others typing the same password", fontsize=11)
     fig.tight_layout()
-    out = ws.figures_dir / "features_by_participant.png"
+    out = ws.figures_dir / "owner_vs_others.png"
     fig.savefig(out, dpi=150)
     print(f"Saved {out}")
 

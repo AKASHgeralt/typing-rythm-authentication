@@ -1,13 +1,27 @@
-"""Stage 5a: train KNN and Random Forest on Session 1 and choose thresholds.
+"""Train one KNN and one Random Forest per account, and choose thresholds.
 
-Steps (Session 1 enrolled attempts only; Session 2 and impostors are not read):
-  1. Nested cross-validation. The outer 5 folds give each attempt a score from a
-     model that never saw it. Inside each outer training part, a 4-fold grid
-     search picks the hyperparameters.
-  2. The out-of-fold scores give 100 genuine and 400 false-claim scores per
-     model. The threshold is set where FAR and FRR are closest.
-  3. Each model is tuned and trained again on all of Session 1 and saved.
-  4. The demo model is the one with the lower cross-validation error rate.
+For each account (target) the Session 1 data has two classes:
+    genuine  (label 1): the owner typing their own password      (30 attempts)
+    impostor (label 0): other people typing that password        (5 attempts)
+Session 2 is not read here.
+
+Models:
+  knn  nearest-neighbour distance to the owner's attempts (src/models.py);
+       learns from the owner's attempts only.
+  rf   Random Forest classifier, owner vs others, class_weight="balanced".
+
+Steps for each model type:
+  1. Nested cross-validation per account. The outer 5 folds give every
+     attempt a genuine score from a model that never saw it. Inside each
+     outer training part, a 4-fold grid search picks the hyperparameters
+     (scoring: ROC AUC, because the classes are unbalanced).
+  2. The out-of-fold scores of all accounts are pooled (150 genuine and 25
+     impostor scores) and ONE threshold per model type is chosen where FAR
+     and FRR are closest. With only 5 impostor attempts per account, a
+     separate threshold per account would be too unreliable.
+  3. Each account's model is tuned and trained again on all its Session 1
+     data and saved.
+  4. The demo model type is the one with the lower pooled CV error.
 
 Run:  python -m src.train            (add --workspace sim for simulated data)
       python -m src.train --shuffle-check   (sanity check with shuffled labels)
@@ -24,31 +38,32 @@ import numpy as np
 import pandas as pd
 from sklearn.base import clone
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import GridSearchCV, StratifiedKFold
-from sklearn.neighbors import KNeighborsClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from src import config, decision
-from src.features import FEATURE_COLUMNS
+from src import config, decision, users
+from src.features import ID_COLUMNS
+from src.models import NearestNeighbourScorer
 
 SEED = config.RANDOM_SEED
-
-MODEL_NAMES = {"knn": "K-Nearest Neighbors", "rf": "Random Forest"}
+MODEL_NAMES = {"knn": "K-Nearest Neighbours (distance)", "rf": "Random Forest"}
+MIN_IMPOSTOR = 5      # needed for 5 outer folds
 
 
 def make_model(name):
     """Return (estimator, hyperparameter grid)."""
     if name == "knn":
-        # The scaler sits inside the pipeline, so it is fitted on training folds only.
-        # k = 1 is left out because it gives only 0/1 scores, which cannot be thresholded.
+        # Nearest-neighbour distance to the owner's attempts (see src/models.py).
+        # Scaler inside the pipeline: fitted on training folds only.
         est = Pipeline([("scale", StandardScaler()),
-                        ("knn", KNeighborsClassifier(weights="distance"))])
-        grid = {"knn__n_neighbors": [3, 5, 7, 9]}
+                        ("knn", NearestNeighbourScorer())])
+        grid = {"knn__n_neighbors": [1, 3, 5]}
     elif name == "rf":
-        est = RandomForestClassifier(random_state=SEED)
-        grid = {"n_estimators": [100, 300], "max_depth": [None, 5, 10]}
+        # class_weight="balanced" because there are 6x more genuine than impostor attempts.
+        est = RandomForestClassifier(random_state=SEED, class_weight="balanced")
+        grid = {"n_estimators": [100, 300], "max_depth": [None, 5]}
     else:
         raise ValueError(name)
     return est, grid
@@ -57,73 +72,56 @@ def make_model(name):
 def grid_search(name, n_splits):
     est, grid = make_model(name)
     cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=SEED)
-    return GridSearchCV(clone(est), grid, cv=cv, scoring="accuracy", n_jobs=-1)
+    return GridSearchCV(clone(est), grid, cv=cv, scoring="roc_auc", n_jobs=-1)
 
 
-def nested_cv(name, X, y, classes):
-    """Out-of-fold scores (n_attempts x n_classes) and the chosen parameters per fold."""
+def genuine_scores(model, X):
+    """Score of the 'genuine' class (label 1)."""
+    return model.predict_proba(X)[:, list(model.classes_).index(1)]
+
+
+def nested_cv(name, X, y):
     outer = StratifiedKFold(n_splits=5, shuffle=True, random_state=SEED)
-    scores = np.zeros((len(y), len(classes)))
+    scores = np.zeros(len(y))
     folds = []
-    for k, (train_idx, test_idx) in enumerate(outer.split(X, y), start=1):
+    for k, (tr, te) in enumerate(outer.split(X, y), start=1):
         gs = grid_search(name, n_splits=4)
-        gs.fit(X[train_idx], y[train_idx])
-        assert list(gs.classes_) == classes
-        scores[test_idx] = gs.predict_proba(X[test_idx])
-        folds.append({"fold": k, "best_params": gs.best_params_,
-                      "inner_accuracy": round(float(gs.best_score_), 4)})
+        gs.fit(X[tr], y[tr])
+        scores[te] = genuine_scores(gs, X[te])
+        folds.append({"fold": k, "best_params": gs.best_params_})
     return scores, folds
 
 
-def classification_metrics(y_true, y_pred):
-    p, r, f1, _ = precision_recall_fscore_support(y_true, y_pred, average="macro",
-                                                  zero_division=0)
-    correct = int(np.sum(np.array(y_true) == np.array(y_pred)))
-    return {"accuracy": float(accuracy_score(y_true, y_pred)),
-            "correct": correct, "total": int(len(y_true)),
-            "precision_macro": float(p), "recall_macro": float(r), "f1_macro": float(f1)}
+def load_session1(ws, user):
+    path = ws.features_file(user["user_id"])
+    if not path.exists():
+        raise SystemExit(f"No features for {user['user_id']}: run python -m src.features first.")
+    df = pd.read_csv(path, dtype={"typist_id": str, "target_id": str, "role": str})
+    s1 = df[df["session"] == 1]
+    X = s1.drop(columns=ID_COLUMNS).to_numpy()
+    y = (s1["role"] == "genuine").astype(int).to_numpy()
+    n_gen, n_imp = int(y.sum()), int((1 - y).sum())
+    if n_imp < MIN_IMPOSTOR or n_gen < MIN_IMPOSTOR:
+        raise SystemExit(f"{user['user_id']}: need at least {MIN_IMPOSTOR} genuine and "
+                         f"{MIN_IMPOSTOR} impostor Session 1 attempts (have {n_gen} and {n_imp}).")
+    return X, y
 
 
 def plot_curve(curve, threshold, title, path):
     t = [c["threshold"] for c in curve]
     fig, ax = plt.subplots(figsize=(5, 3.4))
-    ax.plot(t, [c["far"] for c in curve], label="FAR (false claims accepted)")
-    ax.plot(t, [c["frr"] for c in curve], label="FRR (genuine claims rejected)")
+    ax.plot(t, [c["far"] for c in curve], label="FAR (impostors accepted)")
+    ax.plot(t, [c["frr"] for c in curve], label="FRR (owners rejected)")
     ax.axvline(threshold, color="grey", linestyle="--", linewidth=1)
     ax.text(threshold, 0.95, f" t = {threshold:.2f}", va="top", fontsize=8)
-    ax.set_xlabel("Threshold on the claimed-ID score")
+    ax.set_xlabel("Threshold on the genuine score")
     ax.set_ylabel("Rate")
-    ax.set_title(title, fontsize=10)
     ax.set_ylim(0, 1)
+    ax.set_title(title, fontsize=10)
     ax.legend(fontsize=8)
     fig.tight_layout()
     fig.savefig(path, dpi=150)
     plt.close(fig)
-
-
-def load_session1(ws):
-    if not ws.features_file.exists():
-        raise SystemExit(f"No features yet: run  python -m src.features"
-                         + (f" --workspace {ws.name}" if ws.name != "main" else ""))
-    df = pd.read_csv(ws.features_file, dtype={"participant_id": str, "role": str})
-    train = df[(df["role"] == "enrolled") & (df["session"] == 1)]
-    counts = train["participant_id"].value_counts().reindex(config.ENROLLED_IDS, fill_value=0)
-    if counts.min() < 5:
-        raise SystemExit("Not enough Session 1 data for 5-fold cross-validation:\n"
-                         + counts.to_string())
-    if counts.min() != counts.max():
-        print("Warning: participants have different numbers of attempts:\n" + counts.to_string())
-    return train[FEATURE_COLUMNS].to_numpy(), train["participant_id"].to_numpy()
-
-
-def shuffle_check(X, y, classes):
-    rng = np.random.default_rng(SEED)
-    y_shuffled = rng.permutation(y)
-    print("Shuffled-label check (accuracy should be close to 1/5 = 0.20):")
-    for name in MODEL_NAMES:
-        scores, _ = nested_cv(name, X, y_shuffled, classes)
-        pred = np.array(classes)[scores.argmax(axis=1)]
-        print(f"  {name}: {accuracy_score(y_shuffled, pred):.2f}")
 
 
 def main():
@@ -137,61 +135,72 @@ def main():
     ws.ensure_dirs()
     warnings.filterwarnings("ignore", category=UserWarning)
 
-    X, y = load_session1(ws)
-    classes = sorted(config.ENROLLED_IDS)
-    print(f"Session 1 training data: {len(y)} attempts, {X.shape[1]} features"
+    all_users = users.load_users(ws)
+    data = {u["user_id"]: load_session1(ws, u) for u in all_users}
+    print("Session 1 training data per account (genuine / impostor attempts, features):"
           + (f"  [workspace: {ws.name}]" if ws.name != "main" else ""))
+    for uid, (X, y) in data.items():
+        print(f"  {uid}: {int(y.sum())} / {int((1 - y).sum())}, {X.shape[1]} features")
 
     if args.shuffle_check:
-        shuffle_check(X, y, classes)
+        rng = np.random.default_rng(SEED)
+        print("\nShuffled-label check (ROC AUC should be close to 0.5):")
+        for name in MODEL_NAMES:
+            aucs = []
+            for uid, (X, y) in data.items():
+                y_s = rng.permutation(y)
+                s, _ = nested_cv(name, X, y_s)
+                aucs.append(roc_auc_score(y_s, s))
+            print(f"  {name}: mean AUC {np.mean(aucs):.2f}")
         return
 
-    cv_report, thresholds = {}, {}
+    cv_report, info_models = {}, {}
     for name, label in MODEL_NAMES.items():
-        print(f"\n{label}: nested cross-validation...")
-        scores, folds = nested_cv(name, X, y, classes)
-        pred = np.array(classes)[scores.argmax(axis=1)]
-        genuine, false_claims = decision.split_scores(scores, classes, y)
-        t = decision.choose_threshold(genuine, false_claims)
-        curve = decision.far_frr_curve(genuine, false_claims)
-        plot_curve(curve, t, f"{label}: FAR and FRR (Session 1, out-of-fold)",
-                   ws.figures_dir / f"cv_far_frr_{name}.png")
-
-        result = {
-            "classification": classification_metrics(y, pred),
-            "threshold": t,
-            "frr": decision.frr(genuine, t),
-            "far_enrolled_false_claims": decision.far(false_claims, t),
-            "folds": folds,
-        }
-        result["error_rate"] = (result["frr"]["rate"]
-                                + result["far_enrolled_false_claims"]["rate"]) / 2
+        print(f"\n{label}: nested cross-validation per account...")
+        all_gen, all_imp, per_user, final_params = [], [], {}, {}
+        for uid, (X, y) in data.items():
+            scores, folds = nested_cv(name, X, y)
+            gen, imp = scores[y == 1], scores[y == 0]
+            all_gen.extend(gen)
+            all_imp.extend(imp)
+            per_user[uid] = {"auc": float(roc_auc_score(y, scores)), "folds": folds,
+                             "genuine_scores": gen.round(4).tolist(),
+                             "impostor_scores": imp.round(4).tolist()}
+        t = decision.choose_threshold(all_gen, all_imp)
+        for uid in per_user:
+            per_user[uid]["frr"] = decision.frr(per_user[uid]["genuine_scores"], t)
+            per_user[uid]["far"] = decision.far(per_user[uid]["impostor_scores"], t)
+        result = {"threshold": t,
+                  "frr": decision.frr(all_gen, t),
+                  "far": decision.far(all_imp, t),
+                  "mean_auc": float(np.mean([p["auc"] for p in per_user.values()])),
+                  "per_user": per_user}
+        result["error_rate"] = (result["frr"]["rate"] + result["far"]["rate"]) / 2
         cv_report[name] = result
+        plot_curve(decision.far_frr_curve(all_gen, all_imp), t,
+                   f"{label}: FAR and FRR (Session 1, out-of-fold, all accounts)",
+                   ws.figures_dir / f"cv_far_frr_{name}.png")
+        print(f"  threshold {t:.2f} | FRR {result['frr']['count']}/{result['frr']['total']}"
+              f" | FAR {result['far']['count']}/{result['far']['total']}"
+              f" | mean AUC {result['mean_auc']:.2f}")
 
-        print(f"  accuracy {result['classification']['correct']}/{len(y)}"
-              f" | threshold {t:.2f}"
-              f" | FRR {result['frr']['count']}/{result['frr']['total']}"
-              f" | FAR {result['far_enrolled_false_claims']['count']}"
-              f"/{result['far_enrolled_false_claims']['total']}")
+        for uid, (X, y) in data.items():
+            final = grid_search(name, n_splits=5)
+            final.fit(X, y)
+            joblib.dump(final.best_estimator_, ws.model_file(name, uid))
+            final_params[uid] = final.best_params_
+        info_models[name] = {"threshold": t, "best_params": final_params}
+        print(f"  final models saved for {len(data)} accounts")
 
-        # Final model: tune and fit on all of Session 1.
-        final = grid_search(name, n_splits=5)
-        final.fit(X, y)
-        joblib.dump(final.best_estimator_, ws.model_file(name))
-        thresholds[name] = {"threshold": t, "best_params": final.best_params_}
-        print(f"  final model saved with {final.best_params_}")
-
-    demo = min(cv_report, key=lambda n: (cv_report[n]["error_rate"],
-                                         -cv_report[n]["classification"]["accuracy"]))
-    info = {"models": thresholds, "demo_model": demo, "classes": classes,
-            "features": FEATURE_COLUMNS, "workspace": ws.name}
-    ws.thresholds_file.write_text(json.dumps(info, indent=2))
+    demo = min(cv_report, key=lambda n: (cv_report[n]["error_rate"], -cv_report[n]["mean_auc"]))
+    ws.thresholds_file.write_text(json.dumps(
+        {"models": info_models, "demo_model": demo, "users": list(data),
+         "workspace": ws.name}, indent=2))
     ws.cv_metrics_file.write_text(json.dumps(
-        {"note": "Nested cross-validation on Session 1 only.", "models": cv_report,
-         "demo_model": demo}, indent=2))
+        {"note": "Nested cross-validation on Session 1 only; scores pooled over accounts.",
+         "models": cv_report, "demo_model": demo}, indent=2))
     print(f"\nDemo model (lower cross-validation error): {MODEL_NAMES[demo]}")
-    print(f"Saved models and thresholds to {ws.models_dir}")
-    print(f"Saved CV metrics and figures to {ws.reports_dir}")
+    print(f"Saved models to {ws.models_dir} and CV metrics to {ws.reports_dir}")
 
 
 if __name__ == "__main__":
